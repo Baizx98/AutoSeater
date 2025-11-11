@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>座位表编辑器（Ctrl缩放 / 不偏移框选 / 唯一分配 / 双列表）</title>
+
+    <!-- 依赖 -->
+    <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            margin: 0;
+            background: #eef3fb;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        .layout {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 左侧：座位区（可横向+纵向滚动） */
+        #seatArea {
+            flex: 1;
+            overflow: auto;
+            background: #eef3fb;
+            padding: 12px;
+            position: relative;
+        }
+
+        #stage {
+            display: inline-block;
+        }
+
+        /* 右侧：侧栏（固定宽度，独立滚动） */
+        .sidebar {
+            width: 360px;
+            background: #fff;
+            border-left: 1px solid #dbe2f2;
+            overflow-y: auto;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 22px;
+        }
+
+        .section {
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e6e8ee55;
+        }
+
+        .section>h3 {
+            margin: 0 0 10px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: #f7f9fc;
+            border: 1px solid #dce3ee;
+            padding: 6px 10px;
+            border-radius: 999px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .chip .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        /* 双列表 */
+        .subhead {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            font-size: 13px;
+        }
+
+        .list {
+            max-height: 200px;
+            overflow: auto;
+            border: 1px solid #e6e8ee;
+            border-radius: 8px;
+            padding: 6px;
+            background: #fafbff;
+        }
+
+        .person {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 2px;
+            border-radius: 4px;
+        }
+
+        .person:hover {
+            background: #eef4ff;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 999px;
+            font-size: 11px;
+            background: #eef2ff;
+            border: 1px solid #dfe6ff;
+            color: #445;
+        }
+
+        .meta {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .btnsmall {
+            padding: 6px 8px;
+            font-size: 12px;
+            border: 1px solid #ccd2e2;
+            border-radius: 6px;
+            background: #fff;
+        }
+
+        .btnsmall:hover {
+            background: #f5f7fb;
+        }
+
+        /* 缩放控件（左侧顶部固定） */
+        #zoomControls {
+            position: sticky;
+            top: 10px;
+            left: 10px;
+            display: inline-flex;
+            gap: 6px;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #e4e7f0;
+            border-radius: 8px;
+            padding: 6px;
+            box-shadow: 0 2px 8px rgba(16, 24, 40, 0.08);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="layout">
+
+        <!-- 左侧：座位区域 -->
+        <div id="seatArea">
+            <div id="zoomControls">
+                <button class="btnsmall" id="zoomIn">＋</button>
+                <button class="btnsmall" id="zoomOut">－</button>
+                <button class="btnsmall" id="zoomReset">重置</button>
+                <button class="btnsmall" id="zoomFit">最佳视野</button>
+            </div>
+            <div id="stage"></div>
+        </div>
+
+        <!-- 右侧：设置面板 -->
+        <div class="sidebar">
+
+            <!-- 布局 -->
+            <div class="section">
+                <h3>布局（JSON）</h3>
+                <textarea id="cfgJson" class="rounded-md border px-2 py-1 w-full" style="height:120px; resize:none;">{
+  "rows": 16,
+  "cols": 25,
+  "origin": { "x": 80, "y": 120 },
+  "seat": { "w": 46, "h": 30, "gap": 10 },
+  "aisleWidth": { "row": 50, "col": 70 },
+  "labels": { "stage": "主席台", "booth": "放映室" }
+}</textarea>
+                <input id="aisleTokens" class="rounded-md border px-2 py-1 w-full" placeholder="过道令牌：r5,c6,c19"
+                    value="r5,c6,c19" style="margin-top:6px">
+                <button id="btnRedraw" class="btnsmall"
+                    style="margin-top:6px;width:100%;border-color:#4c8bf5;color:#fff;background:#4c8bf5;">重绘布局</button>
+                <div class="flex gap-2 mt-2">
+                    <button id="btnExportPng" class="btnsmall flex-1">导出PNG</button>
+                    <button id="btnExportXlsx" class="btnsmall flex-1">导出表格</button>
+                </div>
+                <div class="flex gap-2 mt-2">
+                    <button id="btnClearAssigned" class="btnsmall flex-1">清空所有分配</button>
+                    <button id="btnResetAll" class="btnsmall flex-1">重置布局与分配</button>
+                </div>
+            </div>
+
+            <!-- 状态与统计 -->
+            <div class="section">
+                <h3>座位状态（点击应用到选中座位）</h3>
+                <!-- 进度条统计 -->
+                <div id="seatStats" style="font-size:12px;color:#444;margin-bottom:8px;line-height:1.5;"></div>
+
+                <div class="legend" id="legend"></div>
+                <div class="flex gap-2 mt-2">
+                    <input id="newStateName" class="rounded-md border px-2 py-1 w-full" placeholder="新增状态名">
+                    <input id="newStateColor" type="color" value="#ffd6a5" class="rounded-md border px-2 py-1"
+                        style="width:48px;">
+                </div>
+                <div class="flex gap-2 mt-2 items-center">
+                    <button id="btnAddState" class="btnsmall">添加/覆盖</button>
+                    <button id="btnDelState" class="btnsmall">删除状态</button>
+                    <span class="ml-auto text-xs text-gray-600">已选座位：<span id="selCount">0</span></span>
+                </div>
+            </div>
+
+            <!-- 人员管理（双列表） -->
+            <div class="section">
+                <h3>人员管理（唯一分配）</h3>
+
+                <input id="searchName" class="rounded-md border px-2 py-1 w-full" placeholder="搜索姓名…">
+                <select id="filterState" class="rounded-md border px-2 py-1 w-full mt-2">
+                    <option value="">按人员state筛选（可选）</option>
+                </select>
+                <input id="excelFile" type="file" accept=".xlsx,.xls"
+                    class="rounded-md border px-2 py-1 w-full bg-white mt-2">
+
+                <!-- 待分配 -->
+                <div class="subhead mt-3">
+                    <span class="badge">待分配</span>
+                    <button id="btnSelectAllUnassigned" class="btnsmall">全选</button>
+                </div>
+                <div id="listUnassigned" class="list"></div>
+
+                <!-- 已分配 -->
+                <div class="subhead">
+                    <span class="badge">已分配</span>
+                    <button id="btnSelectAllAssigned" class="btnsmall">全选</button>
+                    <button id="btnMoveSelectedBack" class="btnsmall ml-auto">批量移回待分配</button>
+                </div>
+                <div id="listAssigned" class="list"></div>
+
+                <div class="flex gap-2 mt-2">
+                    <input id="manualName" class="rounded-md border px-2 py-1 w-full" placeholder="手动添加姓名…">
+                    <button id="btnAddPerson" class="btnsmall">添加</button>
+                </div>
+
+                <div class="subhead">
+                    <span class="text-xs text-gray-600">将已选“待分配人员”分配到 →</span>
+                </div>
+                <div id="assignBtns" class="flex flex-wrap gap-2"></div>
+
+                <button id="btnAssignAuto" class="btnsmall mt-2 w-full">自动填充『空位』</button>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        /* ======================= 全局状态 ======================= */
+        let stage, layerBase, layerSeats, layerOverlay;
+        let cfg = null;
+
+        let seatGrid = [];        // [{r,c,x,y}]
+        let seats = [];           // { state, personIndex|null }
+        let seatGroups = [];      // Konva.Group per seat
+        let selectedSeats = new Set();
+
+        let people = [];          // { name, state, assigned:boolean, seatIndex:null|number }
+        let selUnassigned = new Set(); // 待分配选择
+        let selAssigned = new Set();   // 已分配选择
+
+        let seatStates = {
+            "空位": { color: "#eef2f7" },
+            "领导席": { color: "#f9c4d2" },
+            "禁用": { color: "#d9d9d9" }
+        };
+
+        const $ = (id) => document.getElementById(id);
+
+        /* ======================= 统计（进度条） ======================= */
+        function updateSeatStats() {
+            let total = seats.length;
+            let stats = {}; Object.keys(seatStates).forEach(s => stats[s] = { total: 0, filled: 0 });
+            seats.forEach(seat => {
+                if (stats[seat.state]) { stats[seat.state].total++; if (seat.personIndex != null) stats[seat.state].filled++; }
+            });
+
+            let html = `<div class="text-sm mb-1">总座位：${total}</div>`;
+            Object.entries(stats).forEach(([state, v]) => {
+                const ratio = v.total ? v.filled / v.total : 0;
+                html += `
+    <div class="my-1">
+      <div class="text-xs mb-1">${state}（${v.filled}/${v.total}）</div>
+      <div style="height:8px; background:#e5e9f2; border-radius:4px;">
+        <div style="height:100%; width:${ratio * 100}%; background:${seatStates[state].color}; border-radius:4px;"></div>
+      </div>
+    </div>`;
+            });
+            $("seatStats").innerHTML = html;
+        }
+
+        /* ======================= 令牌过道 ======================= */
+        function parseAisleTokens(tokens) {
+            const t = (tokens || "").split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+            const rows = [], cols = [];
+            for (const s of t) {
+                if (/^[rR](\d+)$/.test(s)) rows.push(parseInt(RegExp.$1, 10));
+                else if (/^[cC](\d+)$/.test(s)) cols.push(parseInt(RegExp.$1, 10));
+            }
+            rows.sort((a, b) => a - b); cols.sort((a, b) => a - b);
+            return { rows, cols };
+        }
+
+        /* ======================= 构建布局 ======================= */
+        function buildLayout() {
+            try { cfg = JSON.parse($("cfgJson").value); }
+            catch (e) { alert("布局 JSON 解析失败：" + e.message); return; }
+
+            const tokens = parseAisleTokens($("aisleTokens").value);
+            const rows = cfg.rows, cols = cfg.cols;
+            const { w: seatW, h: seatH, gap } = cfg.seat;
+            const { x: ox, y: oy } = cfg.origin;
+            const awRow = cfg.aisleWidth?.row ?? 50;
+            const awCol = cfg.aisleWidth?.col ?? 70;
+
+            const colX = Array(cols + 1).fill(0); colX[1] = ox;
+            for (let c = 2; c <= cols; c++) {
+                const extra = tokens.cols.includes(c - 1) ? awCol : 0;
+                colX[c] = colX[c - 1] + seatW + gap + extra;
+            }
+
+            const rowY = Array(rows + 1).fill(0); rowY[1] = oy;
+            for (let r = 2; r <= rows; r++) {
+                const extra = tokens.rows.includes(r - 1) ? awRow : 0;
+                rowY[r] = rowY[r - 1] + seatH + gap + extra;
+            }
+
+            const totalW = colX[cols] + seatW + ox;
+            const totalH = rowY[rows] + seatH + oy + 30;  // 更紧凑底部
+
+            // 舞台
+            $("stage").innerHTML = "";
+            stage = new Konva.Stage({ container: "stage", width: totalW, height: totalH });
+            layerBase = new Konva.Layer(); layerSeats = new Konva.Layer(); layerOverlay = new Konva.Layer();
+            stage.add(layerBase, layerSeats, layerOverlay);
+
+            // 主席台
+            const stageRect = new Konva.Rect({ x: (totalW - 700) / 2, y: 20, width: 700, height: 44, fill: "#9ec9f5", cornerRadius: 10, opacity: .9 });
+            const stageText = new Konva.Text({ x: stageRect.x(), y: 32, width: 700, align: "center", text: cfg.labels?.stage || "主席台", fontSize: 18, fill: "#fff" });
+            layerBase.add(stageRect, stageText);
+
+            // 列号与列过道
+            for (let c = 1; c <= cols; c++) {
+                layerBase.add(new Konva.Text({ x: colX[c], y: oy - 24, width: seatW, align: "center", text: String(c), fontSize: 12, fill: "#667" }));
+                if (tokens.cols.includes(c)) {
+                    const ax = colX[c] + seatW + 4;
+                    const ah = rowY[rows] - oy + seatH;
+                    layerBase.add(new Konva.Rect({ x: ax, y: oy - 10, width: awCol - 8, height: ah + 20, fill: "#f1f2f5", cornerRadius: 6, stroke: "#e4e7f0" }));
+                    layerBase.add(new Konva.Text({ x: ax, y: oy + 8, width: awCol - 8, align: "center", text: "过道", fontSize: 14, fill: "#9aa1b2" }));
+                }
+            }
+            // 行号与行过道
+            for (let r = 1; r <= rows; r++) {
+                layerBase.add(new Konva.Text({ x: ox - 26, y: rowY[r] + 6, width: 24, align: "right", text: String(r), fontSize: 12, fill: "#667" }));
+                if (tokens.rows.includes(r)) {
+                    const ay = rowY[r] + seatH + 4;
+                    const aw = colX[cols] - ox + seatW;
+                    layerBase.add(new Konva.Rect({ x: ox - 10, y: ay, width: aw + 20, height: awRow - 8, fill: "#f1f2f5", cornerRadius: 6, stroke: "#e4e7f0" }));
+                    layerBase.add(new Konva.Text({ x: ox, y: ay + 8, width: aw, align: "center", text: "过道", fontSize: 14, fill: "#9aa1b2" }));
+                }
+            }
+            // 放映室
+            const boothRect = new Konva.Rect({ x: (totalW - 520) / 2, y: totalH - 72 - 8, width: 520, height: 36, fill: "#cde6d0", cornerRadius: 8, opacity: .9 });
+            const boothText = new Konva.Text({ x: boothRect.x(), y: totalH - 72 - 8 + 8, width: 520, align: "center", text: cfg.labels?.booth || "放映室", fontSize: 16, fill: "#3d5a40" });
+            layerBase.add(boothRect, boothText);
+
+            // seatGrid & seats
+            seatGrid = [];
+            for (let r = 1; r <= rows; r++) for (let c = 1; c <= cols; c++) seatGrid.push({ r, c, x: colX[c], y: rowY[r] });
+
+            const firstState = Object.keys(seatStates)[0] || "空位";
+            seats = Array.from({ length: rows * cols }, () => ({ state: firstState, personIndex: null }));
+            // 同步清空人员分配
+            people.forEach(p => { p.assigned = false; p.seatIndex = null; });
+
+            drawSeats(); initMarquee();
+            layerBase.draw(); layerSeats.draw(); layerOverlay.draw();
+            updateSeatStats(); renderPeopleLists(); rebuildLegendAndAssignButtons();
+
+            // 重置缩放视图
+            currentScale = 1;
+            stage.scale({ x: 1, y: 1 });
+            stage.position({ x: 0, y: 0 });
+            stage.batchDraw();
+        }
+
+        /* ======================= 绘制座位 & 交互 ======================= */
+        function drawSeats() {
+            layerSeats.destroyChildren(); seatGroups = []; selectedSeats.clear(); $("selCount").textContent = "0";
+            const { w: seatW, h: seatH } = cfg.seat;
+
+            for (let i = 0; i < seatGrid.length; i++) {
+                const pos = seatGrid[i];
+                const g = new Konva.Group({ x: pos.x, y: pos.y, draggable: true });
+
+                const rect = new Konva.Rect({ name: "rect", width: seatW, height: seatH, cornerRadius: 5, stroke: "#8893aa", strokeWidth: 1 });
+                const label = new Konva.Text({ name: "label", x: 2, y: 6, width: seatW - 4, align: "center", fontSize: 12, fill: "#223" });
+                g.add(rect, label);
+                updateSeatVisual(i);
+
+                // 选中
+                g.on("click", (e) => {
+                    if (e.evt.ctrlKey || e.evt.metaKey) { selectedSeats.has(i) ? selectedSeats.delete(i) : selectedSeats.add(i); }
+                    else { selectedSeats.clear(); selectedSeats.add(i); }
+                    refreshSelection(); e.cancelBubble = true;
+                });
+
+                // 拖拽交换：同步 people.seatIndex
+                g.on("dragend", () => {
+                    const { x, y } = g.position();
+                    let nearest = { idx: -1, d: 1e9 };
+                    seatGrid.forEach((p, pi) => { const d = Math.hypot(x - p.x, y - p.y); if (d < nearest.d) nearest = { idx: pi, d }; });
+                    if (nearest.d < Math.max(seatW, seatH)) {
+                        const a = i, b = nearest.idx;
+                        const pa = seats[a].personIndex, pb = seats[b].personIndex;
+                        seats[a].personIndex = pb;
+                        seats[b].personIndex = pa;
+                        if (pa != null) people[pa].seatIndex = b;
+                        if (pb != null) people[pb].seatIndex = a;
+                        updateSeatVisual(a); updateSeatVisual(b); updateSeatStats(); renderPeopleLists();
+                    }
+                    g.position({ x: pos.x, y: pos.y });
+                    layerSeats.draw();
+                });
+
+                layerSeats.add(g); seatGroups.push(g);
+            }
+            refreshSelection();
+        }
+        function updateSeatVisual(i) {
+            const seat = seats[i], g = seatGroups[i]; if (!g) return;
+            const rect = g.findOne(".rect"), label = g.findOne(".label");
+            rect.fill(seatStates[seat.state]?.color || "#fff"); rect.opacity(seat.state === "禁用" ? 0.45 : 1);
+            if (seat.personIndex != null) label.text(people[seat.personIndex]?.name || "(未知)");
+            else label.text(seat.state); // 未分配显示状态名
+        }
+        function refreshSelection() {
+            seatGroups.forEach((g, i) => g.findOne(".rect").stroke(selectedSeats.has(i) ? "#2d7ef7" : "#8893aa"));
+            $("selCount").textContent = selectedSeats.size;
+            layerSeats.batchDraw();
+        }
+
+        /* ======================= 框选（方式A：原始坐标，缩放不偏移） ======================= */
+        function initMarquee() {
+            layerOverlay.destroyChildren();
+            const sel = new Konva.Rect({
+                fill: "rgba(76,139,245,0.12)",  // 淡蓝透明
+                stroke: "#4c8bf5",
+                dash: [4, 3],
+                visible: false
+            });
+            layerOverlay.add(sel);
+
+            let selecting = false, start = null;
+
+            stage.on("mousedown", (e) => {
+                // 只在空白/基础层开始框选
+                if (e.target === stage || e.target.getLayer() === layerBase) {
+                    selecting = true;
+                    // 使用原始坐标（相对舞台坐标）
+                    start = stage.getRelativePointerPosition();
+                    selectedSeats.clear(); refreshSelection();
+                    sel.visible(true);
+                    sel.setAttrs({ x: start.x, y: start.y, width: 0, height: 0 });
+                }
+            });
+
+            stage.on("mousemove", () => {
+                if (!selecting) return;
+                const p = stage.getRelativePointerPosition();
+                // 在原始坐标系绘制选择框
+                sel.setAttrs({
+                    x: Math.min(p.x, start.x),
+                    y: Math.min(p.y, start.y),
+                    width: Math.abs(p.x - start.x),
+                    height: Math.abs(p.y - start.y)
+                });
+
+                // 原始坐标命中判断（不再用 getClientRect）
+                const bx = sel.x(), by = sel.y(), bw = sel.width(), bh = sel.height();
+                const { w: seatW, h: seatH } = cfg.seat;
+
+                selectedSeats.clear();
+                for (let i = 0; i < seatGrid.length; i++) {
+                    const sx = seatGrid[i].x, sy = seatGrid[i].y;
+                    // 计算与选择框是否相交（矩形相交判断）
+                    const overlap = !(sx + seatW < bx || sx > bx + bw || sy + seatH < by || sy > by + bh);
+                    if (overlap) selectedSeats.add(i);
+                }
+                refreshSelection();
+                layerOverlay.batchDraw();
+            });
+
+            stage.on("mouseup", () => {
+                if (!selecting) return;
+                selecting = false; sel.visible(false); layerOverlay.draw();
+            });
+        }
+
+        /* ======================= Legend / 分配按钮 ======================= */
+        function rebuildLegendAndAssignButtons() {
+            const legend = $("legend");
+            legend.innerHTML = "";
+            Object.entries(seatStates).forEach(([k, v]) => {
+                const chip = document.createElement("div");
+                chip.className = "chip";
+                chip.innerHTML = `<div class="dot" style="background:${v.color}"></div>${k}`;
+                chip.onclick = () => {
+                    if (!selectedSeats.size) { alert("请先选择座位"); return; }
+                    selectedSeats.forEach(i => { seats[i].state = k; updateSeatVisual(i); });
+                    layerSeats.draw(); updateSeatStats();
+                };
+                legend.appendChild(chip);
+            });
+
+            const box = $("assignBtns");
+            box.innerHTML = "";
+            Object.keys(seatStates).forEach(k => {
+                const b = document.createElement("button");
+                b.className = "btnsmall";
+                b.textContent = k;
+                b.onclick = () => assignSelectedUnassignedToState(k);
+                box.appendChild(b);
+            });
+        }
+
+        /* ======================= 人员列表（双列） ======================= */
+        function filteredIndexes(filterAssigned) {
+            const kw = $("searchName").value.trim();
+            const fs = $("filterState").value.trim();
+            const idxs = [];
+            for (let i = 0; i < people.length; i++) {
+                const p = people[i];
+                if (!!p.assigned !== filterAssigned) continue;
+                if (fs && (p.state || "") !== fs) continue;
+                if (kw && !String(p.name).includes(kw)) continue;
+                idxs.push(i);
+            }
+            return idxs;
+        }
+
+        function renderPeopleLists() {
+            updateFilterStateOptions();
+
+            const unBox = $("listUnassigned");
+            const asBox = $("listAssigned");
+            unBox.innerHTML = ""; asBox.innerHTML = "";
+
+            const unIdxs = filteredIndexes(false);
+            const asIdxs = filteredIndexes(true);
+
+            // 待分配
+            if (unIdxs.length === 0) {
+                unBox.innerHTML = `<div class="text-center text-gray-500 py-4">暂无待分配人员<br><span class="text-xs">可从 Excel 导入，或在下方手动添加</span></div>`;
+            } else {
+                unIdxs.forEach(i => {
+                    const p = people[i];
+                    const row = document.createElement("div"); row.className = "person";
+                    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = selUnassigned.has(i);
+                    cb.onchange = () => { cb.checked ? selUnassigned.add(i) : selUnassigned.delete(i); };
+                    const label = document.createElement("span"); label.textContent = p.name + (p.state ? `（${p.state}）` : "");
+                    row.appendChild(cb); row.appendChild(label);
+                    unBox.appendChild(row);
+                });
+            }
+
+            // 已分配
+            if (asIdxs.length === 0) {
+                asBox.innerHTML = `<div class="text-center text-gray-500 py-4">暂无已分配人员</div>`;
+            } else {
+                asIdxs.forEach(i => {
+                    const p = people[i];
+                    const seatIdx = p.seatIndex;
+                    const rc = seatIdx != null ? `（r${seatGrid[seatIdx].r}, c${seatGrid[seatIdx].c}）` : "";
+                    const row = document.createElement("div"); row.className = "person";
+                    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = selAssigned.has(i);
+                    cb.onchange = () => { cb.checked ? selAssigned.add(i) : selAssigned.delete(i); };
+                    const label = document.createElement("span");
+                    label.innerHTML = `${p.name}${p.state ? `（${p.state}）` : ""} <span class="meta">${rc}</span>`;
+                    label.style.cursor = "pointer";
+                    label.onclick = () => focusSeatOfPerson(i); // 点击定位
+                    const btn = document.createElement("button"); btn.className = "btnsmall"; btn.textContent = "移回";
+                    btn.onclick = () => movePersonBackToUnassigned(i);
+                    row.appendChild(cb); row.appendChild(label); row.appendChild(btn);
+                    asBox.appendChild(row);
+                });
+            }
+        }
+
+        /* ======================= 分配/移回 ======================= */
+        function assignSelectedUnassignedToState(stateName) {
+            const targetSeats = [];
+            seats.forEach((s, i) => { if (s.state === stateName && s.personIndex == null) targetSeats.push(i); });
+            if (!targetSeats.length) { alert(`没有可用的「${stateName}」空位`); return; }
+
+            const idxs = Array.from(selUnassigned);
+            if (!idxs.length) { alert("请在『待分配』中勾选人员"); return; }
+
+            let assignedCount = 0;
+            for (let k = 0; k < idxs.length && k < targetSeats.length; k++) {
+                const personIdx = idxs[k];
+                const seatIdx = targetSeats[k];
+                const p = people[personIdx];
+                if (p.assigned) continue; // 安全兜底
+                seats[seatIdx].personIndex = personIdx;
+                p.assigned = true; p.seatIndex = seatIdx;
+                updateSeatVisual(seatIdx);
+                assignedCount++;
+            }
+            layerSeats.draw(); updateSeatStats();
+            idxs.forEach(i => { if (people[i].assigned) selUnassigned.delete(i); });
+            renderPeopleLists();
+
+            if (assignedCount < idxs.length) {
+                alert(`已分配 ${assignedCount} 人；${idxs.length - assignedCount} 人因座位不足未分配。`);
+            }
+        }
+
+        function movePersonBackToUnassigned(personIdx) {
+            const p = people[personIdx];
+            if (!p.assigned) return;
+            const seatIdx = p.seatIndex;
+            if (seatIdx != null) {
+                seats[seatIdx].personIndex = null;
+                updateSeatVisual(seatIdx);
+            }
+            p.assigned = false; p.seatIndex = null;
+            updateSeatStats(); layerSeats.draw();
+            selAssigned.delete(personIdx);
+            renderPeopleLists();
+        }
+
+        $("btnMoveSelectedBack").onclick = () => {
+            if (!selAssigned.size) { alert("请勾选需要移回的『已分配』人员"); return; }
+            const idxs = Array.from(selAssigned);
+            idxs.forEach(i => movePersonBackToUnassigned(i));
+            selAssigned.clear();
+            renderPeopleLists();
+        };
+
+        /* ======================= Excel / 添加 / 全选 ======================= */
+        function handleExcel(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                const arr = XLSX.utils.sheet_to_json(ws, { defval: "" });
+                people = arr.map(r => ({
+                    name: String(r.name || r["姓名"] || "").trim(),
+                    state: String(r.state || r["状态"] || "").trim() || "",
+                    assigned: false,
+                    seatIndex: null
+                })).filter(p => p.name);
+                selUnassigned.clear(); selAssigned.clear();
+                renderPeopleLists();
+                alert(`已读取 ${people.length} 人`);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        $("btnSelectAllUnassigned").onclick = () => {
+            const idxs = filteredIndexes(false);
+            selUnassigned = new Set(idxs);
+            renderPeopleLists();
+        };
+        $("btnSelectAllAssigned").onclick = () => {
+            const idxs = filteredIndexes(true);
+            selAssigned = new Set(idxs);
+            renderPeopleLists();
+        };
+
+        $("btnAddPerson").onclick = () => {
+            const n = $("manualName").value.trim(); if (!n) return;
+            people.push({ name: n, state: "", assigned: false, seatIndex: null });
+            $("manualName").value = "";
+            renderPeopleLists();
+        };
+
+        $("searchName").addEventListener("input", renderPeopleLists);
+        $("filterState").addEventListener("change", renderPeopleLists);
+        $("excelFile").addEventListener("change", e => { const f = e.target.files[0]; if (f) handleExcel(f); });
+
+        /* ======================= 自动填充『空位』 ======================= */
+        function autoAssignEmpty() {
+            const targets = [];
+            seats.forEach((s, i) => { if (s.state === "空位" && s.personIndex == null) targets.push(i); });
+            if (!targets.length) { alert("没有『空位』空座位"); return; }
+
+            const unassignedIdxs = filteredIndexes(false);
+            let count = 0;
+            for (let k = 0; k < unassignedIdxs.length && k < targets.length; k++) {
+                const personIdx = unassignedIdxs[k];
+                const p = people[personIdx];
+                if (p.assigned) continue;
+                const seatIdx = targets[count];
+                seats[seatIdx].personIndex = personIdx;
+                p.assigned = true; p.seatIndex = seatIdx;
+                updateSeatVisual(seatIdx);
+                count++;
+            }
+            layerSeats.draw(); updateSeatStats();
+            renderPeopleLists();
+            alert(`自动分配 ${count} 人到『空位』。`);
+        }
+        $("btnAssignAuto").onclick = autoAssignEmpty;
+
+        /* ======================= 导出 / 清空 ======================= */
+        function exportXlsx() {
+            const rows = seats.map((s, i) => ({
+                seat_no: i + 1,
+                row: seatGrid[i].r,
+                col: seatGrid[i].c,
+                seat_state: s.state,
+                person: s.personIndex != null ? people[s.personIndex].name : "",
+                assigned: s.personIndex != null ? "yes" : "no"
+            }));
+            const ws = XLSX.utils.json_to_sheet(rows);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "安排");
+            XLSX.writeFile(wb, "座位安排.xlsx");
+        }
+        $("btnExportXlsx").onclick = exportXlsx;
+        $("btnExportPng").onclick = () => {
+            const url = stage.toDataURL({ pixelRatio: 2 });
+            const a = document.createElement("a"); a.href = url; a.download = "座位表.png"; a.click();
+        };
+
+        $("btnClearAssigned").onclick = () => {
+            seats.forEach((s, i) => { if (s.personIndex != null) { s.personIndex = null; updateSeatVisual(i); } });
+            people.forEach(p => { p.assigned = false; p.seatIndex = null; });
+            layerSeats.draw(); updateSeatStats(); renderPeopleLists();
+        };
+
+        $("btnResetAll").onclick = () => {
+            if (!confirm("将重置布局与分配（座位与人员重置为空位/未分配）。继续？")) return;
+            buildLayout();
+        };
+
+        /* ======================= 缩放控制（Ctrl+滚轮 / 按钮 / 最佳） ======================= */
+        let currentScale = 1;
+
+        function applyScale(scale, center = null) {
+            const minS = 0.3, maxS = 3;
+            const newS = Math.max(minS, Math.min(maxS, scale));
+            if (center) {
+                const old = currentScale;
+                const pos = stage.position();
+                stage.scale({ x: newS, y: newS });
+                stage.position({
+                    x: pos.x - (center.x * (newS - old)),
+                    y: pos.y - (center.y * (newS - old))
+                });
+            } else {
+                stage.scale({ x: newS, y: newS });
+            }
+            currentScale = newS;
+            stage.batchDraw();
+        }
+
+        $("zoomIn").onclick = () => applyScale(currentScale * 1.15);
+        $("zoomOut").onclick = () => applyScale(currentScale / 1.15);
+        $("zoomReset").onclick = () => {
+            currentScale = 1;
+            stage.scale({ x: 1, y: 1 });
+            stage.position({ x: 0, y: 0 });
+            stage.batchDraw();
+        };
+        $("zoomFit").onclick = () => {
+            const viewW = $("seatArea").clientWidth;
+            const viewH = $("seatArea").clientHeight;
+            const scaleX = viewW / stage.width();
+            const scaleY = viewH / stage.height();
+            const best = Math.min(scaleX, scaleY) * 0.95;
+            applyScale(best);
+            stage.position({ x: (viewW - stage.width() * best) / 2, y: (viewH - stage.height() * best) / 2 });
+            stage.batchDraw();
+        };
+
+        // 仅 Ctrl + 滚轮触发缩放；否则保持默认滚动
+        document.addEventListener("wheel", (e) => {
+            const rect = $("seatArea").getBoundingClientRect();
+            const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+            if (!inside) return;
+            if (!e.ctrlKey) return; // 必须按住 Ctrl
+            e.preventDefault();
+            const pointer = stage.getPointerPosition();
+            const scaleBy = 1.06;
+            const newScale = e.deltaY > 0 ? currentScale / scaleBy : currentScale * scaleBy;
+            applyScale(newScale, pointer);
+        }, { passive: false });
+
+        /* ======================= 点击人员 → 居中定位（保持缩放） ======================= */
+        function focusSeatOfPerson(personIdx) {
+            const p = people[personIdx];
+            if (p.seatIndex == null) return;
+            const { w: seatW, h: seatH } = cfg.seat;
+            const pos = seatGrid[p.seatIndex];
+            const centerX = pos.x + seatW / 2;
+            const centerY = pos.y + seatH / 2;
+
+            const viewW = $("seatArea").clientWidth;
+            const viewH = $("seatArea").clientHeight;
+
+            // 只平移居中（保持 currentScale）
+            stage.position({
+                x: viewW / 2 - centerX * currentScale,
+                y: viewH / 2 - centerY * currentScale
+            });
+            stage.batchDraw();
+
+            // 高亮闪烁
+            const rect = seatGroups[p.seatIndex].findOne(".rect");
+            const oldStroke = rect.stroke();
+            rect.stroke("#ff8800");
+            layerSeats.draw();
+            setTimeout(() => { rect.stroke(oldStroke); layerSeats.draw(); }, 1200);
+        }
+
+        /* ======================= 启动 & 绑定 ======================= */
+        function updateFilterStateOptions() {
+            const states = Array.from(new Set(people.map(p => p.state).filter(Boolean))).sort();
+            const fsEl = $("filterState");
+            const cur = fsEl.value;
+            fsEl.innerHTML = `<option value="">按人员state筛选（可选）</option>`;
+            states.forEach(s => { const op = document.createElement("option"); op.value = s; op.textContent = s; fsEl.appendChild(op); });
+            fsEl.value = cur || "";
+        }
+
+        rebuildLegendAndAssignButtons();
+        buildLayout();
+        renderPeopleLists();
+    </script>
+</body>
+
+</html>
