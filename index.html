@@ -846,6 +846,39 @@
         rebuildLegendAndAssignButtons();
         buildLayout();
         renderPeopleLists();
+        // 重绘布局
+        $("btnRedraw").onclick = () => {
+            buildLayout();
+        };
+
+        // 添加 / 覆盖 状态
+        $("btnAddState").onclick = () => {
+            const name = $("newStateName").value.trim();
+            const color = $("newStateColor").value;
+            if (!name) { alert("请输入状态名称"); return; }
+            seatStates[name] = { color };
+            rebuildLegendAndAssignButtons();
+            updateSeatStats();
+            // 所有未分配该状态的座位并不会自动改变，这样更安全
+        };
+
+        // 删除状态
+        $("btnDelState").onclick = () => {
+            const name = $("newStateName").value.trim();
+            if (!name) { alert("请输入要删除的状态名称"); return; }
+            if (!(name in seatStates)) { alert("该状态不存在"); return; }
+
+            // 防止所有座位变成无效状态，将该状态的座位改为第一个状态
+            const fallback = Object.keys(seatStates).find(s => s !== name) || "空位";
+            seats.forEach((s, i) => {
+                if (s.state === name) { s.state = fallback; updateSeatVisual(i); }
+            });
+
+            delete seatStates[name];
+            rebuildLegendAndAssignButtons();
+            layerSeats.draw();
+            updateSeatStats();
+        };
     </script>
 </body>
 
