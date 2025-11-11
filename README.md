@@ -34,8 +34,9 @@ Simply **double-click**:
 ` index.html `
 
 No server, no dependencies, no install.  
-Works on Windows / macOS / Linux.
-
+Works on Windows / macOS / Linux.  
+### 3. Try Online
+<https://site.baizx.cool>  
 ---
 
 ## 🧩 File Structure
